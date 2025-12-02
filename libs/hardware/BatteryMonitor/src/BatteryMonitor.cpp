@@ -1,5 +1,9 @@
 #include "BatteryMonitor.h"
-#include "esp_adc_cal.h"
+#include <esp32-hal-adc.h>
+#include <esp_adc_cal.h>
+
+inline float min(const float a, const float b) { return a < b ? a : b; }
+inline float max(const float a, const float b) { return a > b ? a : b; }
 
 BatteryMonitor::BatteryMonitor(uint8_t adcPin, float dividerMultiplier)
   : _adcPin(adcPin), _dividerMultiplier(dividerMultiplier)
