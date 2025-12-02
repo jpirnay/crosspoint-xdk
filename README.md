@@ -42,15 +42,16 @@ Add this repository as a submodule:
 git submodule add https://github.com/open-x4-epaper/community-sdk.git open-x4-sdk
 ```
 
-Then include add the lib categories you need into your `platformio.ini` file:
+Then add each lib you need into your `platformio.ini` file as `lib_deps`:
 
 ```ini
-lib_extra_dirs = 
-  open-x4-sdk/libs/display
-  open-x4-sdk/libs/hardware
+lib_deps =
+  BatteryMonitor=symlink://open-x4-sdk/libs/hardware/BatteryMonitor
+  EpdScreenController=symlink://open-x4-sdk/libs/display/EpdScreenController
 ```
 
-Then you can include the libraries in your project as needed:
+Then you can include the libraries in your project as usual:
+
 ```cpp
 #include <BatteryMonitor.h>
 #include <EpdScreenController.h>
