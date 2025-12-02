@@ -39,15 +39,22 @@ Libs should be categorized under `libs/` based on functionality, and then contai
 Add this repository as a submodule:
 
 ```bash
-git submodule add https://github.com/open-x4-epaper/community-sdk.git lib/openx4
+git submodule add https://github.com/open-x4-epaper/community-sdk.git open-x4-sdk
 ```
 
-Then include any library you want in your code:
+Then include add the lib categories you need into your `platformio.ini` file:
 
+```ini
+lib_extra_dirs = 
+  open-x4-sdk/libs/display
+  open-x4-sdk/libs/hardware
+```
+
+Then you can include the libraries in your project as needed:
 ```cpp
-#include <openx4/display/BufferedEinkDisplay/BufferedEinkDisplay.h>
-#include <openx4/graphics/Canvas/Canvas.h>
-```
+#include <BatteryMonitor.h>
+#include <EpdScreenController.h>
+`````
 
 Or load tools from the `tools/` directory as needed.
 
