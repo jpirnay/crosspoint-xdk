@@ -1,9 +1,10 @@
 #pragma once
 
-#include <WString.h>
-#include <vector>
-#include <string>
 #include <SdFat.h>
+#include <WString.h>
+
+#include <string>
+#include <vector>
 
 class SDCardManager {
  public:
@@ -26,11 +27,26 @@ class SDCardManager {
   bool ensureDirectoryExists(const char* path);
 
   FsFile open(const char* path, const oflag_t oflag = O_RDONLY) { return sd.open(path, oflag); }
-  bool mkdir(const char* path, const bool pFlag = true) { return sd.mkdir(path, pFlag); }
+  bool mkdir(const char* path, const bool pFlag = true) {
+    invalidateUsedBytesCache();
+    return sd.mkdir(path, pFlag);
+  }
   bool exists(const char* path) { return sd.exists(path); }
-  bool remove(const char* path) { return sd.remove(path); }
-  bool rmdir(const char* path) { return sd.rmdir(path); }
-  bool rename(const char* path, const char* newPath) { return sd.rename(path, newPath); }
+  bool remove(const char* path) {
+    invalidateUsedBytesCache();
+    return sd.remove(path);
+  }
+  bool rmdir(const char* path) {
+    invalidateUsedBytesCache();
+    return sd.rmdir(path);
+  }
+  bool rename(const char* path, const char* newPath) {
+    invalidateUsedBytesCache();
+    return sd.rename(path, newPath);
+  }
+
+  uint64_t sdTotalBytes() const;
+  uint64_t sdUsedBytes() const;
 
   bool openFileForRead(const char* moduleName, const char* path, FsFile& file);
   bool openFileForRead(const char* moduleName, const std::string& path, FsFile& file);
@@ -40,13 +56,19 @@ class SDCardManager {
   bool openFileForWrite(const char* moduleName, const String& path, FsFile& file);
   bool removeDir(const char* path);
 
- static SDCardManager& getInstance() { return instance; }
+  static SDCardManager& getInstance() { return instance; }
 
  private:
   static SDCardManager instance;
 
   bool initialized = false;
   SdFat sd;
+
+  uint64_t cachedTotalBytes = 0;
+  mutable uint64_t cachedUsedBytes = 0;
+  mutable bool cachedUsedBytesValid = false;
+
+  void invalidateUsedBytesCache();
 };
 
 #define SdMan SDCardManager::getInstance()
