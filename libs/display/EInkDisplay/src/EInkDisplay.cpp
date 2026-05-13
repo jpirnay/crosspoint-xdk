@@ -426,7 +426,7 @@ void EInkDisplay::initDisplayController() {
   if (_x3Mode) {
     sendCommand(0x00);
     sendData(0x3F);  // OEM value
-    sendData(0x0A);  // OEM value (was 0x08)
+    sendData(0x08);  // reverted (OEM 0x0A caused ghosting, see crosspoint-reader#fix-x3-ghosting-regs)
     sendCommand(0x61);
     sendData(0x03);
     sendData(0x18);
@@ -438,7 +438,7 @@ void EInkDisplay::initDisplayController() {
     sendData(0x00);
     sendData(0x00);
     sendCommand(0x03);
-    sendData(0x20);  // OEM value (was 0x1D)
+    sendData(0x1D);  // reverted (OEM 0x20 caused ghosting, see crosspoint-reader#fix-x3-ghosting-regs)
     sendCommand(0x01);
     sendData(0x07);
     sendData(0x17);
@@ -446,7 +446,7 @@ void EInkDisplay::initDisplayController() {
     sendData(0x3F);
     sendData(0x17);
     sendCommand(0x82);
-    sendData(0x24);  // OEM value (was 0x1D)
+    sendData(0x1D);  // reverted (OEM 0x24 caused ghosting, see crosspoint-reader#fix-x3-ghosting-regs)
     sendCommand(0x06);
     sendData(0x25);
     sendData(0x25);
