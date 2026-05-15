@@ -52,6 +52,9 @@ class EInkDisplay {
   void copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer);
   void copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer);
   void copyGrayscaleMsbBuffers(const uint8_t* msbBuffer);
+  // Write bwBuffer to BW RAM silently (no panel refresh). X4 only — no-op on X3.
+  // Used to prime BW RAM before a grayscale sequence without showing an interim frame.
+  void seedBwRam(const uint8_t* bwBuffer);
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
   void cleanupGrayscaleBuffers(const uint8_t* bwBuffer);
 #endif

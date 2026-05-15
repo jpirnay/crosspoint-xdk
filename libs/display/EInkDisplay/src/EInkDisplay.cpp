@@ -750,6 +750,12 @@ void EInkDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) {
   writeRamBuffer(CMD_WRITE_RAM_RED, msbBuffer, bufferSize);
 }
 
+void EInkDisplay::seedBwRam(const uint8_t* bwBuffer) {
+  if (_x3Mode || !bwBuffer) return;
+  setRamArea(0, 0, displayWidth, displayHeight);
+  writeRamBuffer(CMD_WRITE_RAM_BW, bwBuffer, bufferSize);
+}
+
 void EInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer) {
   if (_x3Mode) {
     copyGrayscaleLsbBuffers(lsbBuffer);
