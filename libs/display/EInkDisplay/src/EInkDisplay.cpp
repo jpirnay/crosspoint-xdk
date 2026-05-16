@@ -299,7 +299,7 @@ void EInkDisplay::begin() {
 
   // Initialize SPI with custom pins
   SPI.begin(_sclk, -1, _mosi, _cs);
-  const uint32_t spiHz = _x3Mode ? 16000000 : 40000000;
+  const uint32_t spiHz = _x3Mode ? 10000000 : 40000000;
   spiSettings = SPISettings(spiHz, MSBFIRST, SPI_MODE0);
   if (Serial) Serial.printf("[%lu]   SPI initialized at %lu Hz, Mode 0\n", millis(), spiHz);
 
@@ -456,6 +456,19 @@ void EInkDisplay::initDisplayController() {
     sendData(0x09);
     sendCommand(0xE1);
     sendData(0x02);
+    // Pre-load the full differential LUT bank so the controller uses known-good
+    // waveforms from the first refresh rather than its built-in OEM defaults.
+    // Removed by e100a3c; absence caused black border artifact on x3.
+    sendCommand(0x20);
+    sendData(lut_x3_vcom_full, 42);
+    sendCommand(0x21);
+    sendData(lut_x3_ww_full, 42);
+    sendCommand(0x22);
+    sendData(lut_x3_bw_full, 42);
+    sendCommand(0x23);
+    sendData(lut_x3_wb_full, 42);
+    sendCommand(0x24);
+    sendData(lut_x3_bb_full, 42);
     isScreenOn = false;
     return;
   }
