@@ -905,7 +905,7 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
       sendPlane(0x13, frameBuffer, true);
       sendPlane(0x10, frameBuffer, true);
 
-      sendCommandDataByteX3(0x50, 0x29, 0x07);  // 0xA9 drives border black during full sync
+      sendCommandDataByteX3(0x50, 0xA9, 0x07);
     } else {
       sendCommandDataX3(0x20, lut_x3_vcom_full, 42);
       sendCommandDataX3(0x21, lut_x3_ww_full, 42);
