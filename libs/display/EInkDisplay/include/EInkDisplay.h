@@ -52,6 +52,20 @@ class EInkDisplay {
   void copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer);
   void copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer);
   void copyGrayscaleMsbBuffers(const uint8_t* msbBuffer);
+
+  // Stream one horizontal band of a grayscale plane straight to controller RAM
+  // so the caller never holds a full plane buffer in MCU heap (the heap win
+  // behind tiled grayscale). `plane` selects LSB/MSB RAM; `rows` points at
+  // `numRows` physical rows (displayWidthBytes wide) whose top is logical
+  // `yStart`. X4 writes each band as an independent windowed RAM write via
+  // setRamArea; X3 (UC81xx) windows each band via PTL. Either way bands may be
+  // streamed in any order.
+  enum GrayPlane { GRAY_PLANE_LSB, GRAY_PLANE_MSB };
+  void writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t* rows, uint16_t yStart, uint16_t numRows);
+
+  // True when the tiled/strip grayscale path is supported. X4 (SSD1677) windows
+  // each band via setRamArea; X3 (UC81xx) windows via PTL. Both implemented.
+  bool supportsStripGrayscale() const { return true; }
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
   void cleanupGrayscaleBuffers(const uint8_t* bwBuffer);
 #endif
