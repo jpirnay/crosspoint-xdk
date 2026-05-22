@@ -135,11 +135,52 @@ class EInkDisplay {
   void sendData(const uint8_t* data, uint16_t length);
   void waitForRefresh(const char* comment = nullptr);
   void waitWhileBusy(const char* comment = nullptr);
+  // Shared body for the two waits above. X4 (SSD1677) and X3 (UC81xx-class)
+  // use opposite BUSY-line polarities:
+  //   X4: active HIGH. BUSY HIGH while working, drops LOW when done.
+  //   X3: active LOW.  BUSY HIGH when idle, drops LOW while working, returns
+  //                    HIGH when done.
+  // The per-panel polling logic therefore stays gated; consolidation here
+  // is the function body only.
+  void pollBusy(const char* comment, const char* completeWord);
   void initDisplayController();
 
   // Low-level display operations
   void setRamArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
   void writeRamBuffer(uint8_t ramBuffer, const uint8_t* data, uint32_t size);
+
+  // X3 (UC81xx) primitives. Promoted from inline lambdas that used to be
+  // redefined in displayBuffer / displayGrayBuffer / grayscaleRevert. These
+  // fuse a command byte and a short data payload into one CS-low SPI
+  // transaction — used for LUT register / mode-select / partial-window
+  // writes where the payload is small. Bulk plane writes go through
+  // sendPlaneX3/fillPlaneX3 (separated sendCommand+sendData). Not an
+  // atomicity requirement, just convenience.
+  void sendCommandDataX3(uint8_t cmd, const uint8_t* data, uint16_t len);
+  void sendCommandDataByteX3(uint8_t cmd, uint8_t d0);
+  void sendCommandDataByteX3(uint8_t cmd, uint8_t d0, uint8_t d1);
+  // Bulk-write a pixel plane to one of the DTM RAM commands. Y-flips rows
+  // in-place (X3 controller scans gates upward), optionally inverts bits
+  // before sending, then restores the buffer.
+  void sendPlaneX3(uint8_t ramCmd, uint8_t* buf, bool invert);
+  // Fill an entire RAM plane with a single byte (e.g., 0xFF for white).
+  // Streams a small row buffer repeatedly so the framebuffer isn't touched.
+  void fillPlaneX3(uint8_t ramCmd, uint8_t fillByte);
+  // Load all 5 LUT registers (VCOM/WW/BW/WB/BB) in one call. Each pointer
+  // must reference a 42-byte LUT bank in PROGMEM/DRAM.
+  void loadLutBankX3(const uint8_t* vcom, const uint8_t* ww,
+                     const uint8_t* bw, const uint8_t* wb,
+                     const uint8_t* bb);
+  void loadLutBankX3WithCdi(uint8_t cdi0, const uint8_t* vcom,
+                            const uint8_t* ww, const uint8_t* bw,
+                            const uint8_t* wb, const uint8_t* bb);
+  void loadLutBankX3WithCdi(uint8_t cdi0, uint8_t cdi1,
+                            const uint8_t* vcom, const uint8_t* ww,
+                            const uint8_t* bw, const uint8_t* wb,
+                            const uint8_t* bb);
+  // Power-on if needed, trigger refresh, optionally power-off. The `tag`
+  // string is included verbatim in busy-wait log lines.
+  void triggerRefreshX3(bool turnOffScreen, const char* tag);
 };
 
 // Factory LUTs extracted from firmware V3.1.9_CH_X4_0117.bin.
