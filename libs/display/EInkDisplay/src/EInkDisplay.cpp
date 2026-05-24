@@ -1133,12 +1133,13 @@ void EInkDisplay::writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t *rows,
   if (_x3Mode) {
     // X3 (UC81xx) has no SSD1677-style RAM windowing, but PTL partial-window is
     // the equivalent: window to this band, then write its rows to the DTM plane
-    // (LSB -> 0x10, MSB -> 0x13). Rows are emitted bottom-first within the band
-    // to reproduce the whole-plane Y-flip the non-streaming path applies (X3
-    // scans gates upward). Window Y is logical, matching the post-condition
-    // pass's full-screen PTL usage; band placement is verified on-device.
-    // Each band's data is its own CS-low burst so the SPI bus is free for
-    // SD-card font reads between bands.
+    // (LSB -> 0x10, MSB -> 0x13). Band rows must land bottom-first to reproduce
+    // the whole-plane Y-flip the non-streaming path applies (X3 scans gates
+    // upward). We reverse the band in place so the full payload goes out as a
+    // single SPI burst instead of one writeBytes() per row — the per-call SPI
+    // overhead added up to ~1 ms per band at 240 rows. Reversed back after the
+    // burst to preserve the caller's const-correct view of the buffer. Same
+    // in-place flip pattern as cleanupGrayscaleBuffers() below.
     const uint8_t ramCmd =
         (plane == GRAY_PLANE_LSB) ? CMD_X3_DTM1 : CMD_X3_DTM2;
     const uint16_t xEnd = displayWidth - 1;
@@ -1155,14 +1156,29 @@ void EInkDisplay::writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t *rows,
     sendCommand(CMD_X3_PARTIAL_IN);
     sendCommandDataX3(CMD_X3_PARTIAL_WINDOW, win, 9);
     sendCommand(ramCmd);
-    SPI.beginTransaction(spiSettings);
-    digitalWrite(_dc, HIGH);
-    digitalWrite(_cs, LOW);
-    for (int r = static_cast<int>(numRows) - 1; r >= 0; r--)
-      SPI.writeBytes(rows + static_cast<uint32_t>(r) * displayWidthBytes,
-                     displayWidthBytes);
-    digitalWrite(_cs, HIGH);
-    SPI.endTransaction();
+
+    auto *band = const_cast<uint8_t *>(rows);
+    uint8_t rowTmp[128]; // covers X3 width (99 B) and X4 width (100 B)
+    for (uint16_t top = 0, bot = numRows - 1; top < bot; top++, bot--) {
+      uint8_t *rowA = band + static_cast<uint32_t>(top) * displayWidthBytes;
+      uint8_t *rowB = band + static_cast<uint32_t>(bot) * displayWidthBytes;
+      memcpy(rowTmp, rowA, displayWidthBytes);
+      memcpy(rowA, rowB, displayWidthBytes);
+      memcpy(rowB, rowTmp, displayWidthBytes);
+    }
+    // sendData length is uint16_t (65 535 byte ceiling). At 99/100 B/row the
+    // band caps at ~655 rows, well above the renderer's ~240-row scratch.
+    const uint32_t payload =
+        static_cast<uint32_t>(numRows) * displayWidthBytes;
+    sendData(band, static_cast<uint16_t>(payload));
+    for (uint16_t top = 0, bot = numRows - 1; top < bot; top++, bot--) {
+      uint8_t *rowA = band + static_cast<uint32_t>(top) * displayWidthBytes;
+      uint8_t *rowB = band + static_cast<uint32_t>(bot) * displayWidthBytes;
+      memcpy(rowTmp, rowA, displayWidthBytes);
+      memcpy(rowA, rowB, displayWidthBytes);
+      memcpy(rowB, rowTmp, displayWidthBytes);
+    }
+
     sendCommand(CMD_X3_PARTIAL_OUT);
     // X3 displayGrayBuffer gates on lsbValid; the tiled path bypasses
     // copyGrayscaleLsbBuffers, so mark it when the LSB plane lands.
