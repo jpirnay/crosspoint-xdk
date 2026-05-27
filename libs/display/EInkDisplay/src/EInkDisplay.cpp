@@ -1017,9 +1017,10 @@ void EInkDisplay::grayscaleRevert() {
     // alone and ignores DTM1 state — the same trick X4's
     // lut_grayscale_revert uses with state-coded patterns. With both
     // planes white, every pixel gets the "drive to white" waveform and the
-    // panel ends in a clean known state. _x3RedRamSynced is set true
-    // because DTM1 now matches DTM2 (both all-white) so the next BW page
-    // turn can fast-diff cleanly.
+    // panel ends in a clean known state. _x3ForceFullSyncNext is set so the
+    // next displayBuffer runs a full refresh: DTM1/DTM2 are all-white after
+    // the revert, not the actual prior frame, so a fast differential would
+    // ghost pixels that were dark before AA.
     fillPlaneX3(CMD_X3_DTM1, 0xFF);
     sendCommand(CMD_X3_DATA_STOP);
     fillPlaneX3(CMD_X3_DTM2, 0xFF);
@@ -1031,6 +1032,13 @@ void EInkDisplay::grayscaleRevert() {
     loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_half, lut_x3_ww_half,
                          lut_x3_bw_half, lut_x3_wb_half, lut_x3_bb_half);
     triggerRefreshX3(/*turnOffScreen=*/false, "(revert)");
+    // After revert, DTM1 and DTM2 both hold all-white — not the actual frame
+    // that was visible before AA. A fast differential against this all-white
+    // baseline would only drive pixels that are dark in the *new* frame,
+    // letting any pixels that were dark in the reader page ghost through.
+    // Force a full sync so the next displayBuffer drives every pixel correctly
+    // from the known-white baseline rather than diffing against stale content.
+    _x3ForceFullSyncNext = true;
     _x3RedRamSynced = true;
     return;
   }
