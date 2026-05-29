@@ -46,9 +46,7 @@ class EInkDisplay {
                  bool fromProgmem = false) const;
   void drawImageTransparent(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                             bool fromProgmem = false) const;
-#ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   void swapBuffers();
-#endif
   void setFramebuffer(const uint8_t* bwBuffer) const;
 
   void copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer);
@@ -68,9 +66,18 @@ class EInkDisplay {
   // True when the tiled/strip grayscale path is supported. X4 (SSD1677) windows
   // each band via setRamArea; X3 (UC81xx) windows via PTL. Both implemented.
   bool supportsStripGrayscale() const { return true; }
-#ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
+  // Silently seed RED RAM from frameBuffer after a displayBuffer() call, without
+  // triggering a refresh. Restores the single-buffer-mode post-refresh behaviour
+  // for content (like dithered cover images) where fast differential refresh
+  // produces ghosting due to residual charge from large pixel-state changes.
+  void syncRedRamFromFrameBuffer();
   void cleanupGrayscaleBuffers(const uint8_t* bwBuffer);
-#endif
+  // Reseed RED RAM from frameBufferActive (the full BW page committed by the
+  // last displayBuffer call, including images) and sync frameBuffer to match.
+  // Call after displayGrayBuffer() to restore a correct differential baseline
+  // without re-rendering. Cheaper and more correct than cleanupGrayscaleBuffers
+  // when the previous-frame slot is already valid.
+  void cleanupGrayscaleWithPreviousBuffer();
 
   void displayBuffer(RefreshMode mode = FAST_REFRESH, bool turnOffScreen = false);
   // EXPERIMENTAL: Windowed update - display only a rectangular region
@@ -142,10 +149,8 @@ class EInkDisplay {
   // Frame buffer (statically allocated)
   uint8_t frameBuffer0[MAX_BUFFER_SIZE];
   uint8_t* frameBuffer;
-#ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   uint8_t frameBuffer1[MAX_BUFFER_SIZE];
   uint8_t* frameBufferActive;
-#endif
 
   // SPI settings
   SPISettings spiSettings;
