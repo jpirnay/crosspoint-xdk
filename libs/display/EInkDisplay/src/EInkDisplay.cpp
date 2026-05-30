@@ -1133,12 +1133,6 @@ void EInkDisplay::copyGrayscaleBuffers(const uint8_t *lsbBuffer,
   writeRamBuffer(CMD_WRITE_RAM_RED, msbBuffer, bufferSize);
 }
 
-#ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
-/**
- * In single buffer mode, this should be called with the previously written BW
- * buffer to reconstruct the RED buffer for proper differential fast refreshes
- * following a grayscale display.
- */
 void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t *bwBuffer) {
   if (_x3Mode) {
     if (!bwBuffer) {
@@ -1189,7 +1183,16 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t *bwBuffer) {
   if (frameBuffer != bwBuffer)
     memcpy(frameBuffer, bwBuffer, bufferSize);
 }
-#endif
+
+void EInkDisplay::cleanupGrayscaleWithPreviousBuffer() {
+  cleanupGrayscaleBuffers(frameBufferActive);
+}
+
+void EInkDisplay::syncRedRamFromFrameBuffer() {
+  if (_x3Mode) return;
+  setRamArea(0, 0, displayWidth, displayHeight);
+  writeRamBuffer(CMD_WRITE_RAM_RED, frameBuffer, bufferSize);
+}
 
 void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
   if (!isScreenOn && !turnOffScreen) {
