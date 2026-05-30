@@ -1174,12 +1174,20 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t *bwBuffer) {
     _x3ForceFullSyncNext = false;
     _x3ForcedConditionPassesNext = 0;
     inGrayscaleMode = false;
+    // Restore frameBuffer from the BW source so subsequent draws (e.g. popups)
+    // paint onto a valid BW baseline rather than leftover grayscale plane data.
+    if (frameBuffer != bwBuffer)
+      memcpy(frameBuffer, bwBuffer, bufferSize);
     return;
   }
 
   setRamArea(0, 0, displayWidth, displayHeight);
   writeRamBuffer(CMD_WRITE_RAM_RED, bwBuffer, bufferSize);
   inGrayscaleMode = false;
+  // Restore frameBuffer from the BW source so subsequent draws (e.g. popups)
+  // paint onto a valid BW baseline rather than leftover grayscale plane data.
+  if (frameBuffer != bwBuffer)
+    memcpy(frameBuffer, bwBuffer, bufferSize);
 }
 #endif
 
