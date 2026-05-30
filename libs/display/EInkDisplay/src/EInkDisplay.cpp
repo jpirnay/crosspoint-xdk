@@ -434,9 +434,7 @@ EInkDisplay::EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc,
                          int8_t rst, int8_t busy)
     : _sclk(sclk), _mosi(mosi), _cs(cs), _dc(dc), _rst(rst), _busy(busy),
       frameBuffer(nullptr),
-#ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
       frameBufferActive(nullptr),
-#endif
       customLutActive(false) {
   if (Serial)
     Serial.printf("[%lu] EInkDisplay: Constructor called\n", millis());
@@ -455,27 +453,19 @@ void EInkDisplay::begin() {
   drawGrayscale = false;
 
   frameBuffer = frameBuffer0;
-#ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   frameBufferActive = frameBuffer1;
-#endif
 
   // Initialize to white
   memset(frameBuffer0, 0xFF, bufferSize);
+  memset(frameBuffer1, 0xFF, bufferSize);
   _x3RedRamSynced = false;
   _x3InitialFullSyncsRemaining = _x3Mode ? 2 : 0;
   _x3ForceFullSyncNext = false;
   _x3ForcedConditionPassesNext = 0;
   _x3GrayState = {};
-#ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
-  if (Serial)
-    Serial.printf("[%lu]   Static frame buffer (%lu bytes)\n", millis(),
-                  bufferSize);
-#else
-  memset(frameBuffer1, 0xFF, bufferSize);
   if (Serial)
     Serial.printf("[%lu]   Static frame buffers (2 x %lu bytes)\n", millis(),
                   bufferSize);
-#endif
 
   if (Serial)
     Serial.printf("[%lu]   Initializing e-ink display driver...\n", millis());
@@ -988,13 +978,11 @@ void EInkDisplay::setFramebuffer(const uint8_t *bwBuffer) const {
   memcpy(frameBuffer, bwBuffer, bufferSize);
 }
 
-#ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
 void EInkDisplay::swapBuffers() {
   uint8_t *temp = frameBuffer;
   frameBuffer = frameBufferActive;
   frameBufferActive = temp;
 }
-#endif
 
 void EInkDisplay::grayscaleRevert() {
   if (!inGrayscaleMode) {
@@ -1380,28 +1368,13 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
   } else {
     // For fast refresh, write to BW buffer only
     writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
-    // In single buffer mode, the RED RAM should already contain the previous
-    // frame In dual buffer mode, we write back frameBufferActive which is the
-    // last frame
-#ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
     writeRamBuffer(CMD_WRITE_RAM_RED, frameBufferActive, bufferSize);
-#endif
   }
 
-#ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
   swapBuffers();
-#endif
 
   // Refresh the display
   refreshDisplay(mode, turnOffScreen);
-
-#ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
-  // In single buffer mode always sync RED RAM after refresh to prepare for next
-  // fast refresh This ensures RED contains the currently displayed frame for
-  // differential comparison
-  setRamArea(0, 0, displayWidth, displayHeight);
-  writeRamBuffer(CMD_WRITE_RAM_RED, frameBuffer, bufferSize);
-#endif
 }
 
 // EXPERIMENTAL: Windowed update support
@@ -1480,8 +1453,7 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
   // Write to BW RAM (current frame)
   writeRamBuffer(CMD_WRITE_RAM_BW, windowBuffer.data(), windowBufferSize);
 
-#ifndef EINK_DISPLAY_SINGLE_BUFFER_MODE
-  // Dual buffer: Extract window from frameBufferActive (previous frame)
+  // Extract window from frameBufferActive (previous frame) for differential
   std::vector<uint8_t> previousWindowBuffer(windowBufferSize);
   for (uint16_t row = 0; row < h; row++) {
     const uint16_t srcY = y + row;
@@ -1492,16 +1464,9 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
   }
   writeRamBuffer(CMD_WRITE_RAM_RED, previousWindowBuffer.data(),
                  windowBufferSize);
-#endif
 
   // Perform fast refresh
   refreshDisplay(FAST_REFRESH, turnOffScreen);
-
-#ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
-  // Post-refresh: Sync RED RAM with current window (for next fast refresh)
-  setRamArea(x, y, w, h);
-  writeRamBuffer(CMD_WRITE_RAM_RED, windowBuffer.data(), windowBufferSize);
-#endif
 
   if (Serial)
     Serial.printf("[%lu]   Window display complete\n", millis());
