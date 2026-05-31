@@ -1355,6 +1355,9 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
     }
     _x3ForceFullSyncNext = false;
     _x3ForcedConditionPassesNext = 0;
+    // Mirror X4: keep frameBufferActive in sync with the just-displayed frame
+    // so cleanupGrayscaleWithPreviousBuffer() reseeds from the correct page.
+    swapBuffers();
     return;
   }
 
