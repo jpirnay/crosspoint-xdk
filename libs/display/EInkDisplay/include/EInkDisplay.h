@@ -8,8 +8,8 @@ public:
   EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc, int8_t rst,
               int8_t busy);
 
-  // Destructor
-  ~EInkDisplay() = default;
+  // Destructor — frees heap-allocated frame buffers if still live.
+  ~EInkDisplay() { free(frameBuffer0); free(frameBuffer1); }
 
   // Refresh modes (guarded to avoid redefinition in test builds)
   enum RefreshMode {
@@ -104,6 +104,17 @@ public:
   // Access to frame buffer
   uint8_t *getFrameBuffer() const { return frameBuffer; }
 
+  // Release both frame buffers back to the heap. Call only after the final
+  // displayBuffer() — the e-ink controller retains the image in its own RAM.
+  // After this call no display operations may be performed until begin() is
+  // called again. Intended for the web server session where the device reboots
+  // on exit and ~52KB of heap is more valuable than rendering ability.
+  // Calling when already released is a safe no-op.
+  void releaseBuffers() {
+    free(frameBuffer0); frameBuffer0 = nullptr; frameBuffer = nullptr;
+    free(frameBuffer1); frameBuffer1 = nullptr; frameBufferActive = nullptr;
+  }
+
   // Save the current framebuffer to a PBM file (desktop/test builds only)
   void saveFrameBufferAsPBM(const char *filename);
 
@@ -133,11 +144,11 @@ private:
   // `lut_x3_*_grayscale` bank instead of the OEM 53-frame `lut_x3_*_gc` bank.
   // See setFastGrayscaleLut() for trade-offs.
   bool _x3FastGrayLut = false;
-  // Frame buffer (statically allocated)
-  uint8_t frameBuffer0[MAX_BUFFER_SIZE];
-  uint8_t *frameBuffer;
-  uint8_t frameBuffer1[MAX_BUFFER_SIZE];
-  uint8_t *frameBufferActive;
+  // Frame buffers — heap-allocated in begin(), freed by releaseBuffers().
+  uint8_t *frameBuffer0 = nullptr;
+  uint8_t *frameBuffer = nullptr;
+  uint8_t *frameBuffer1 = nullptr;
+  uint8_t *frameBufferActive = nullptr;
 
   // SPI settings
   SPISettings spiSettings;
