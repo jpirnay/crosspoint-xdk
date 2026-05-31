@@ -452,6 +452,14 @@ void EInkDisplay::begin() {
   inGrayscaleMode = false;
   drawGrayscale = false;
 
+  // Allocate frame buffers from heap. Freed by releaseBuffers() when the
+  // web server session takes over and no rendering is needed any more.
+  if (!frameBuffer0) frameBuffer0 = static_cast<uint8_t*>(malloc(bufferSize));
+  if (!frameBuffer1) frameBuffer1 = static_cast<uint8_t*>(malloc(bufferSize));
+  if (!frameBuffer0 || !frameBuffer1) {
+    if (Serial) Serial.printf("[%lu]   ERROR: frame buffer malloc failed!\n", millis());
+    return;
+  }
   frameBuffer = frameBuffer0;
   frameBufferActive = frameBuffer1;
 
@@ -464,7 +472,7 @@ void EInkDisplay::begin() {
   _x3ForcedConditionPassesNext = 0;
   _x3GrayState = {};
   if (Serial)
-    Serial.printf("[%lu]   Static frame buffers (2 x %lu bytes)\n", millis(),
+    Serial.printf("[%lu]   Frame buffers allocated (2 x %lu bytes)\n", millis(),
                   bufferSize);
 
   if (Serial)
