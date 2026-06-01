@@ -4,6 +4,26 @@
 #include <fstream>
 #include <vector>
 
+// SDK-level Serial.printf logs (refresh timing, LUT mode, X3 trigger lines)
+// are suppressed by default. Define EINK_DISPLAY_VERBOSE to re-enable them.
+#ifndef EINK_DISPLAY_VERBOSE
+// Redefine Serial for this translation unit only so that every
+//   if (Serial) Serial.printf(...)
+// compiles to nothing. The condition is always false; the printf call is
+// dead code that the optimizer eliminates. No call sites need changing.
+// Null Serial stub: operator bool() returns false so every `if (Serial)` branch
+// is dead code, and printf is a no-op. Defined with non-const printf to match
+// the real HardwareSerial signature.
+#undef Serial
+struct EInkNullSerial_ {
+  explicit operator bool() const { return false; }
+  template<typename... A> void printf(A&&...) const {}
+  template<typename... A> void print(A&&...) const {}
+  template<typename... A> void println(A&&...) const {}
+} inline _eink_null_serial;
+#define Serial _eink_null_serial
+#endif
+
 // SSD1677 command definitions
 // Initialization and reset
 #define CMD_SOFT_RESET 0x12            // Soft reset
