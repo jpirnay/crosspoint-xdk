@@ -1013,6 +1013,9 @@ void EInkDisplay::writeRamBuffer(uint8_t ramBuffer, const uint8_t* data, uint32_
 void EInkDisplay::setFramebuffer(const uint8_t* bwBuffer) const { memcpy(frameBuffer, bwBuffer, bufferSize); }
 
 void EInkDisplay::swapBuffers() {
+  if (!frameBufferActive) {
+    return;
+  }
   uint8_t* temp = frameBuffer;
   frameBuffer = frameBufferActive;
   frameBufferActive = temp;
@@ -1202,7 +1205,10 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
   if (frameBuffer != bwBuffer) memcpy(frameBuffer, bwBuffer, bufferSize);
 }
 
-void EInkDisplay::cleanupGrayscaleWithPreviousBuffer() { cleanupGrayscaleBuffers(frameBufferActive); }
+void EInkDisplay::cleanupGrayscaleWithPreviousBuffer() {
+  const uint8_t* baseline = frameBufferActive ? frameBufferActive : frameBuffer;
+  cleanupGrayscaleBuffers(baseline);
+}
 
 void EInkDisplay::syncRedRamFromFrameBuffer() {
   if (_x3Mode) return;
@@ -1248,17 +1254,6 @@ void EInkDisplay::triggerDisplay(RefreshMode mode, const bool turnOffScreen) {
       sendPlaneX3(CMD_X3_DTM2, frameBuffer, false);
     }
 
-    // Pre-write DTM1 NOW (before the waveform trigger) so that after
-    // swapBuffers() below the caller can freely overwrite frameBuffer
-    // without corrupting the differential baseline for the next refresh.
-    // For full sync DTM1 was already filled with 0xFF above; for half/fast
-    // we write the current frame as the "previous" reference.
-    if (!doFullSync) {
-      sendPlaneX3(CMD_X3_DTM1, frameBuffer, false);
-      sendCommand(CMD_X3_DATA_STOP);
-      _x3RedRamSynced = true;
-    }
-
     if (!isScreenOn || doFullSync) {
       sendCommand(CMD_X3_POWER_ON);
       waitForRefresh(" X3_PON");  // ~20 ms charge-pump: keep blocking
@@ -1272,8 +1267,7 @@ void EInkDisplay::triggerDisplay(RefreshMode mode, const bool turnOffScreen) {
     { const unsigned long t0 = millis();
       while (digitalRead(_busy) == HIGH && millis() - t0 < 10) {} }
     armBusyIsr();
-    // Swap now so frameBuffer points to the inactive buffer — safe for the
-    // caller to start rendering the next page immediately.
+    // Swap now so frameBuffer points to the inactive buffer when available.
     swapBuffers();
     // Store state needed by completeDisplay().
     _refreshPending = true;
@@ -1284,13 +1278,19 @@ void EInkDisplay::triggerDisplay(RefreshMode mode, const bool turnOffScreen) {
   }
 
   // X4 path
+  // No previous-frame buffer available (OOM after temporary release):
+  // downgrade FAST to HALF and use single-buffer operation safely.
+  if (mode == FAST_REFRESH && !frameBufferActive) {
+    mode = HALF_REFRESH;
+  }
+
   setRamArea(0, 0, displayWidth, displayHeight);
   if (mode != FAST_REFRESH) {
     writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
     writeRamBuffer(CMD_WRITE_RAM_RED, frameBuffer, bufferSize);
   } else {
     writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
-    writeRamBuffer(CMD_WRITE_RAM_RED, frameBufferActive, bufferSize);
+    writeRamBuffer(CMD_WRITE_RAM_RED, frameBufferActive ? frameBufferActive : frameBuffer, bufferSize);
   }
   swapBuffers();
   refreshDisplay(mode, turnOffScreen);  // issues CMD_MASTER_ACTIVATION + returns
@@ -1319,7 +1319,13 @@ void EInkDisplay::completeDisplay() {
   _refreshPending = false;
 
   if (!doFullSync) {
-    // flag updates only — DTM1 was already written in triggerDisplay()
+    // Keep differential baseline correct for the next x3 fast refresh:
+    // write the just-displayed BW frame into DTM1 after waveform completion.
+    const uint8_t* baseline = frameBufferActive ? frameBufferActive : frameBuffer;
+    sendPlaneX3(CMD_X3_DTM1, const_cast<uint8_t*>(baseline), false);
+    sendCommand(CMD_X3_DATA_STOP);
+    _x3RedRamSynced = true;
+
     _x3ForceFullSyncNext = false;
     _x3ForcedConditionPassesNext = 0;
     return;
@@ -1348,23 +1354,24 @@ void EInkDisplay::completeDisplay() {
                       static_cast<unsigned>(postConditionPasses));
       sendCommand(CMD_X3_PARTIAL_IN);
       sendCommandDataX3(CMD_X3_PARTIAL_WINDOW, w, 9);
-      // Use frameBufferActive: it holds the just-displayed frame after swapBuffers()
-      sendPlaneX3(CMD_X3_DTM2, frameBufferActive, false);
+      // Use the just-displayed frame after swapBuffers(); fallback to
+      // frameBuffer when secondary buffer is unavailable.
+      sendPlaneX3(CMD_X3_DTM2, frameBufferActive ? frameBufferActive : frameBuffer, false);
       sendCommand(CMD_X3_PARTIAL_OUT);
       triggerRefreshX3(/*turnOffScreen=*/false, "(cond)");
     }
   }
 
   // DTM1 resync for full sync (DTM1 needs the current frame, not all-0xFF baseline)
-  sendPlaneX3(CMD_X3_DTM1, frameBufferActive, false);
+  sendPlaneX3(CMD_X3_DTM1, frameBufferActive ? frameBufferActive : frameBuffer, false);
   sendCommand(CMD_X3_DATA_STOP);
   _x3RedRamSynced = true;
 
   // Post-full settle: one no-op fast diff to clear the post-full controller state
   loadLutBankX3WithCdi(0x29, 0x07, lut_x3_vcom_fast, lut_x3_ww_fast, lut_x3_bw_fast, lut_x3_wb_fast, lut_x3_bb_fast);
-  sendPlaneX3(CMD_X3_DTM2, frameBufferActive, false);
+  sendPlaneX3(CMD_X3_DTM2, frameBufferActive ? frameBufferActive : frameBuffer, false);
   triggerRefreshX3(_refreshTurnOff, "(post-full settle)");
-  sendPlaneX3(CMD_X3_DTM1, frameBufferActive, false);
+  sendPlaneX3(CMD_X3_DTM1, frameBufferActive ? frameBufferActive : frameBuffer, false);
   sendCommand(CMD_X3_DATA_STOP);
 
   if (_x3InitialFullSyncsRemaining > 0) _x3InitialFullSyncsRemaining--;
