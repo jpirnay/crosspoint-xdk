@@ -89,6 +89,13 @@ class EInkDisplay {
   // debug function
   void grayscaleRevert();
 
+  // Arm / disarm the BUSY GPIO ISR for a single waveform-completion event.
+  // armBusyIsr() must be called immediately before issuing CMD_DISPLAY_REFRESH
+  // or CMD_X3_DISPLAY_REFRESH. waitForRefresh() then sleeps on the semaphore
+  // instead of spin-polling, freeing the CPU for the loop task.
+  void armBusyIsr();
+  void disarmBusyIsr();
+
   // LUT control
   void setCustomLUT(bool enabled, const unsigned char* lutData = nullptr);
 
@@ -112,6 +119,28 @@ class EInkDisplay {
     frameBuffer1 = nullptr;
     frameBufferActive = nullptr;
   }
+
+  // Non-blocking display split:
+  //
+  // triggerDisplay() sends all pixel data to the controller via SPI, issues
+  // the refresh command, performs swapBuffers() and any pre-waveform DTM1
+  // pre-sync, then RETURNS IMMEDIATELY without waiting for the waveform.
+  //
+  // completeDisplay() blocks (via FreeRTOS semaphore sleep) until the BUSY
+  // pin deasserts, then performs all post-waveform work (conditioning passes,
+  // flag updates). It must be called on the SAME TASK as triggerDisplay().
+  //
+  // displayBuffer() = triggerDisplay() + completeDisplay() (backwards-compat).
+  //
+  // Concurrency contract:
+  //   - Both methods must be called from the same task (the render task).
+  //   - No other task may call any display SPI method between triggerDisplay()
+  //     and completeDisplay() — the SPI bus is logically owned by the render
+  //     task for this entire window.
+  //   - frameBuffer is safe to overwrite after triggerDisplay() returns.
+  void triggerDisplay(RefreshMode mode, bool turnOffScreen = false);
+  void completeDisplay();
+  bool isRefreshPending() const { return _refreshPending; }
 
   // Release only the secondary (previous-frame) buffer (~52 KB on X3, ~48 KB
   // on X4) to free heap temporarily — e.g. during chapter compilation when
@@ -177,6 +206,12 @@ class EInkDisplay {
   uint8_t* frameBuffer = nullptr;
   uint8_t* frameBuffer1 = nullptr;
   uint8_t* frameBufferActive = nullptr;
+
+  // Non-blocking refresh state (triggerDisplay / completeDisplay split).
+  bool _refreshPending = false;     // true between trigger and complete
+  bool _refreshTurnOff = false;     // turnOffScreen arg stored for complete
+  bool _refreshDoFullSync = false;  // X3: doFullSync stored for complete
+  bool _refreshDoHalfSync = false;  // X3: doHalfSync stored for complete
 
   // SPI settings
   SPISettings spiSettings;
