@@ -21,8 +21,15 @@
 // X4 polarity: BUSY HIGH = working → ISR on FALLING edge.
 // X3 polarity: BUSY LOW  = working → ISR on RISING edge.
 
-static SemaphoreHandle_t s_refreshDone = nullptr;
-static bool s_isrArmed = false;
+// DRAM_ATTR: s_refreshDone is read by the IRAM_ATTR ISR — must reside in DRAM,
+// not flash. Static non-const variables go to DRAM by default on ESP32, but
+// DRAM_ATTR makes the intent explicit and safe against future const refactors.
+static DRAM_ATTR SemaphoreHandle_t s_refreshDone = nullptr;
+// volatile: s_isrArmed is written by task code and read in the same translation
+// unit; volatile prevents the compiler from caching the value across inlined
+// call boundaries (relevant under LTO where armBusyIsr/waitForRefresh can be
+// merged into one optimization unit).
+static volatile bool s_isrArmed = false;
 
 static void IRAM_ATTR busyIsr() {
   if (!s_refreshDone) return;
@@ -545,13 +552,16 @@ void EInkDisplay::resetDisplay() {
 }
 
 // Arm the BUSY GPIO ISR for a single waveform completion event.
-// Must be called just before issuing CMD_DISPLAY_REFRESH / CMD_X3_DISPLAY_REFRESH.
+// Must be called AFTER issuing CMD_DISPLAY_REFRESH / CMD_X3_DISPLAY_REFRESH
+// and AFTER confirming the waveform has started (BUSY asserted).
+// This ordering guarantees the ISR only fires on the real completion edge,
+// not on SPI-noise or the idle→busy transition.
 void EInkDisplay::armBusyIsr() {
   if (!s_refreshDone || s_isrArmed) return;
-  // Drain any stale token from a previous (possibly unwaited) fire.
+  // Drain any stale token left from a previous run.
   xSemaphoreTake(s_refreshDone, 0);
-  // X4: BUSY HIGH while working → wait for FALLING (goes LOW = done).
-  // X3: BUSY LOW while working  → wait for RISING  (goes HIGH = done).
+  // X4: BUSY HIGH while working → done on FALLING edge (goes LOW).
+  // X3: BUSY LOW while working  → done on RISING edge  (goes HIGH).
   const int edge = _x3Mode ? RISING : FALLING;
   attachInterrupt(digitalPinToInterrupt(_busy), busyIsr, edge);
   s_isrArmed = true;
@@ -564,18 +574,26 @@ void EInkDisplay::disarmBusyIsr() {
 }
 
 void EInkDisplay::waitForRefresh(const char* comment) {
-  // Only use the ISR-driven semaphore path when armBusyIsr() was called
-  // immediately before this wait — i.e. we are waiting for a DRF waveform.
-  // PON / POF / reset waits do NOT arm the ISR and must use the spin-poll.
+  // Use the ISR-driven semaphore path only when armBusyIsr() was called
+  // for this waveform. PON / POF / init waits do NOT arm the ISR.
   if (s_refreshDone && s_isrArmed) {
-    const TickType_t timeout = pdMS_TO_TICKS(30000);
-    xSemaphoreTake(s_refreshDone, timeout);
+    // If BUSY is already in the idle state (X3: HIGH, X4: LOW), the waveform
+    // completed before we could take the semaphore — drain and return.
+    // This covers the rare case where armBusyIsr() was called after the
+    // waveform already finished (BUSY never went LOW in the startup poll).
+    const bool busyDone = _x3Mode ? (digitalRead(_busy) == HIGH)
+                                  : (digitalRead(_busy) == LOW);
+    if (busyDone) {
+      disarmBusyIsr();
+      xSemaphoreTake(s_refreshDone, 0);  // drain any token
+      (void)comment;
+      return;
+    }
+    xSemaphoreTake(s_refreshDone, pdMS_TO_TICKS(30000));
     disarmBusyIsr();
     (void)comment;
     return;
   }
-  // Fallback: spin-poll for non-waveform waits (PON, POF, reset) and for
-  // calls before the FreeRTOS scheduler is running.
   pollBusy(comment, "Refresh done");
 }
 
@@ -750,8 +768,12 @@ void EInkDisplay::triggerRefreshX3(bool turnOffScreen, const char* tag) {
     isScreenOn = true;
   }
   if (Serial) Serial.printf("[%lu]   X3_OEM_TRIGGER=DRF%s\n", millis(), tag);
-  armBusyIsr();
   sendCommand(CMD_X3_DISPLAY_REFRESH);
+  // Confirm BUSY went LOW (waveform started) before arming ISR — prevents
+  // spurious fire from SPI noise on the DRF command.
+  { const unsigned long t0 = millis();
+    while (digitalRead(_busy) == HIGH && millis() - t0 < 10) {} }
+  armBusyIsr();
   {
     char buf[32];
     snprintf(buf, sizeof(buf), " X3_DRF%s", tag);
@@ -1243,8 +1265,13 @@ void EInkDisplay::triggerDisplay(RefreshMode mode, const bool turnOffScreen) {
       isScreenOn = true;
     }
     if (Serial) Serial.printf("[%lu]   X3_OEM_TRIGGER=DRF\n", millis());
-    armBusyIsr();
     sendCommand(CMD_X3_DISPLAY_REFRESH);
+    // Wait for BUSY to go LOW — confirms the waveform has started and there
+    // are no SPI-noise edges in flight. Only then arm the ISR for the RISING
+    // edge (waveform done). Polling up to 10 ms; waveform itself is 380+ ms.
+    { const unsigned long t0 = millis();
+      while (digitalRead(_busy) == HIGH && millis() - t0 < 10) {} }
+    armBusyIsr();
     // Swap now so frameBuffer points to the inactive buffer — safe for the
     // caller to start rendering the next page immediately.
     swapBuffers();
@@ -1266,7 +1293,6 @@ void EInkDisplay::triggerDisplay(RefreshMode mode, const bool turnOffScreen) {
     writeRamBuffer(CMD_WRITE_RAM_RED, frameBufferActive, bufferSize);
   }
   swapBuffers();
-  armBusyIsr();
   refreshDisplay(mode, turnOffScreen);  // issues CMD_MASTER_ACTIVATION + returns
   // X4: all post-refresh work is done inside refreshDisplay(); nothing left
   // for completeDisplay() on X4 except waiting for the semaphore which was
@@ -1583,7 +1609,6 @@ void EInkDisplay::refreshDisplay(const RefreshMode mode, const bool turnOffScree
   sendCommand(CMD_DISPLAY_UPDATE_CTRL2);
   sendData(displayMode);
 
-  armBusyIsr();
   sendCommand(CMD_MASTER_ACTIVATION);
 
   // Wait for display to finish updating
