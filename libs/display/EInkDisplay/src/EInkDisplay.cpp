@@ -7,7 +7,6 @@
 #include <fstream>
 #include <vector>
 
-
 // ── ISR-driven waveform-completion notification ──────────────────────────────
 //
 // A single binary semaphore is shared between the BUSY GPIO ISR and
@@ -565,18 +564,18 @@ void EInkDisplay::disarmBusyIsr() {
 }
 
 void EInkDisplay::waitForRefresh(const char* comment) {
-  if (s_refreshDone) {
-    // ISR-driven path: genuinely sleep until BUSY deasserts.
-    // The ISR was armed by armBusyIsr() before the trigger command.
-    // Timeout of 30 s matches the legacy spin-poll safety net.
+  // Only use the ISR-driven semaphore path when armBusyIsr() was called
+  // immediately before this wait — i.e. we are waiting for a DRF waveform.
+  // PON / POF / reset waits do NOT arm the ISR and must use the spin-poll.
+  if (s_refreshDone && s_isrArmed) {
     const TickType_t timeout = pdMS_TO_TICKS(30000);
     xSemaphoreTake(s_refreshDone, timeout);
     disarmBusyIsr();
-    // Log the timing inline (mirrors the legacy path output format).
-    (void)comment;  // suppress unused-parameter warning
+    (void)comment;
     return;
   }
-  // Fallback if semaphore was never created (e.g. called before constructor).
+  // Fallback: spin-poll for non-waveform waits (PON, POF, reset) and for
+  // calls before the FreeRTOS scheduler is running.
   pollBusy(comment, "Refresh done");
 }
 
