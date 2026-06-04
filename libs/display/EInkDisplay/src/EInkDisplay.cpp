@@ -464,12 +464,6 @@ EInkDisplay::EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc, int8_t 
       frameBuffer(nullptr),
       frameBufferActive(nullptr),
       customLutActive(false) {
-  if (!s_refreshDone) {
-    s_refreshDone = xSemaphoreCreateBinary();
-    // Start with semaphore taken so the first waitForRefresh() blocks until
-    // the ISR fires.  If semaphore creation fails we fall back to the legacy
-    // spin-poll in pollBusy().
-  }
   if (Serial) Serial.printf("[%lu] EInkDisplay: Constructor called\n", millis());
   if (Serial)
     Serial.printf("[%lu]   SCLK=%d, MOSI=%d, CS=%d, DC=%d, RST=%d, BUSY=%d\n", millis(), sclk, mosi, cs, dc, rst, busy);
@@ -477,6 +471,17 @@ EInkDisplay::EInkDisplay(int8_t sclk, int8_t mosi, int8_t cs, int8_t dc, int8_t 
 
 void EInkDisplay::begin() {
   if (Serial) Serial.printf("[%lu] EInkDisplay: begin() called\n", millis());
+
+  // Create the refresh-done semaphore here (not in the constructor) so it is
+  // allocated after the FreeRTOS scheduler is running. Constructing this object
+  // as a global calls xSemaphoreCreateBinary() before the scheduler starts,
+  // which corrupts the TLSF heap metadata.
+  if (!s_refreshDone) {
+    s_refreshDone = xSemaphoreCreateBinary();
+    // Start with semaphore taken so the first waitForRefresh() blocks until
+    // the ISR fires. If semaphore creation fails we fall back to the legacy
+    // spin-poll in pollBusy().
+  }
 
   isScreenOn = false;
   customLutActive = false;
