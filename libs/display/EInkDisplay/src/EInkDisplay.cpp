@@ -586,8 +586,7 @@ void EInkDisplay::waitForRefresh(const char* comment) {
     // completed before we could take the semaphore — drain and return.
     // This covers the rare case where armBusyIsr() was called after the
     // waveform already finished (BUSY never went LOW in the startup poll).
-    const bool busyDone = _x3Mode ? (digitalRead(_busy) == HIGH)
-                                  : (digitalRead(_busy) == LOW);
+    const bool busyDone = _x3Mode ? (digitalRead(_busy) == HIGH) : (digitalRead(_busy) == LOW);
     if (busyDone) {
       disarmBusyIsr();
       xSemaphoreTake(s_refreshDone, 0);  // drain any token
@@ -776,8 +775,11 @@ void EInkDisplay::triggerRefreshX3(bool turnOffScreen, const char* tag) {
   sendCommand(CMD_X3_DISPLAY_REFRESH);
   // Confirm BUSY went LOW (waveform started) before arming ISR — prevents
   // spurious fire from SPI noise on the DRF command.
-  { const unsigned long t0 = millis();
-    while (digitalRead(_busy) == HIGH && millis() - t0 < 10) {} }
+  {
+    const unsigned long t0 = millis();
+    while (digitalRead(_busy) == HIGH && millis() - t0 < 10) {
+    }
+  }
   armBusyIsr();
   {
     char buf[32];
@@ -1217,8 +1219,15 @@ void EInkDisplay::cleanupGrayscaleWithPreviousBuffer() {
 
 void EInkDisplay::syncRedRamFromFrameBuffer() {
   if (_x3Mode) return;
+  // After swapBuffers(), frameBufferActive holds the just-displayed frame and
+  // frameBuffer holds the old (pre-swap) frame that is now the write target.
+  // RED RAM must track what the controller currently shows so the next fast
+  // differential refresh diffs against the correct baseline. Use
+  // frameBufferActive when present; fall back to frameBuffer in single-buffer
+  // mode (frameBufferActive == nullptr).
+  const uint8_t* justDisplayed = frameBufferActive ? frameBufferActive : frameBuffer;
   setRamArea(0, 0, displayWidth, displayHeight);
-  writeRamBuffer(CMD_WRITE_RAM_RED, frameBuffer, bufferSize);
+  writeRamBuffer(CMD_WRITE_RAM_RED, justDisplayed, bufferSize);
 }
 
 void EInkDisplay::triggerDisplay(RefreshMode mode, const bool turnOffScreen) {
@@ -1269,8 +1278,11 @@ void EInkDisplay::triggerDisplay(RefreshMode mode, const bool turnOffScreen) {
     // Wait for BUSY to go LOW — confirms the waveform has started and there
     // are no SPI-noise edges in flight. Only then arm the ISR for the RISING
     // edge (waveform done). Polling up to 10 ms; waveform itself is 380+ ms.
-    { const unsigned long t0 = millis();
-      while (digitalRead(_busy) == HIGH && millis() - t0 < 10) {} }
+    {
+      const unsigned long t0 = millis();
+      while (digitalRead(_busy) == HIGH && millis() - t0 < 10) {
+      }
+    }
     armBusyIsr();
     // Swap now so frameBuffer points to the inactive buffer when available.
     swapBuffers();
