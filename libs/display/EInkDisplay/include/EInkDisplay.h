@@ -23,6 +23,9 @@ class EInkDisplay {
   // Set X3 panel geometry and mode (must be called before begin())
   void setDisplayX3();
 
+  // Returns true when running in X3 mode (set by setDisplayX3()).
+  bool isX3Mode() const { return _x3Mode; }
+
   // Initialize the display hardware and driver
   void begin();
 
