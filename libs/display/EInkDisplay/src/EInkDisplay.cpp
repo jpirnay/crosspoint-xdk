@@ -381,6 +381,10 @@ void EInkDisplay::setDisplayX3() {
 void EInkDisplay::requestResync(uint8_t settlePasses) {
   _x3ForceFullSyncNext = _x3Mode;
   _x3ForcedConditionPassesNext = _x3Mode ? settlePasses : 0;
+  // X4: force a FULL_REFRESH on the next triggerDisplay to clear any ghosting
+  // left by a mid-grayscale-waveform crash. On X4 the X3 conditioning machinery
+  // does not exist, so we track this separately.
+  if (!_x3Mode) _x4ForceFullNext = true;
 }
 
 void EInkDisplay::skipInitialResync() {
@@ -506,6 +510,7 @@ void EInkDisplay::begin() {
   _x3InitialFullSyncsRemaining = _x3Mode ? 2 : 0;
   _x3ForceFullSyncNext = false;
   _x3ForcedConditionPassesNext = 0;
+  _x4ForceFullNext = false;
   _x3GrayState = {};
   if (Serial) Serial.printf("[%lu]   Frame buffers allocated (2 x %lu bytes)\n", millis(), bufferSize);
 
@@ -1295,6 +1300,12 @@ void EInkDisplay::triggerDisplay(RefreshMode mode, const bool turnOffScreen) {
   }
 
   // X4 path
+  // Force FULL_REFRESH if requested (crash-recovery resync) — clears ghosting
+  // left by a mid-grayscale-waveform crash that HALF/FAST cannot clean up.
+  if (_x4ForceFullNext) {
+    _x4ForceFullNext = false;
+    mode = FULL_REFRESH;
+  }
   // No previous-frame buffer available (OOM after temporary release):
   // downgrade FAST to HALF and use single-buffer operation safely.
   if (mode == FAST_REFRESH && !frameBufferActive) {
