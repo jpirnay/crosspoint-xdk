@@ -200,7 +200,6 @@ class EInkDisplay {
   uint8_t _x3InitialFullSyncsRemaining = 0;
   bool _x3ForceFullSyncNext = false;
   uint8_t _x3ForcedConditionPassesNext = 0;
-  bool _x4ForceFullNext = false;  // X4: force FULL_REFRESH on next triggerDisplay (crash recovery)
   // When true, X3 differential grayscale uses the 7-frame community
   // `lut_x3_*_grayscale` bank instead of the OEM 53-frame `lut_x3_*_gc` bank.
   // See setFastGrayscaleLut() for trade-offs.
