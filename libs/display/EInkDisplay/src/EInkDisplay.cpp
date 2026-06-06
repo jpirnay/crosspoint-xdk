@@ -1430,14 +1430,71 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
   }
 
   if (_x3Mode) {
-    // X3 uses a different command set for windowed RAM addressing (0x91/0x90/
-    // 0x92) than X4 (setRamArea + CMD_WRITE_RAM_*). Rather than maintain a
-    // second X3-specific partial-update implementation, route X3 through the
-    // shared displayBuffer pipeline. Visual result is equivalent; only
-    // difference is the unchanged region of the screen also refreshes.
-    // displayBuffer already handles inGrayscaleMode revert and the wake-from-
-    // off HALF refresh policy.
-    displayBuffer(FAST_REFRESH, turnOffScreen);
+    // X3 native partial-window path using UC8179 PTL/PTIN/PTOUT commands.
+    //
+    // UC8179 partial refresh sequence (matches OEM conditioning pass exactly):
+    //   PTIN  (0x91)                — enter partial mode
+    //   PTL   (0x90) + 9-byte window — {HRST_H, HRST_L, HRED_H, HRED_L,
+    //                                    VRST_H, VRST_L, VRED_H, VRED_L,
+    //                                    PT_SCAN=0x01}
+    //   DTM2  (0x13) + full frame   — full frame written; PTL limits waveform
+    //   PTOUT (0x92)                — exit partial mode (NO DATA_STOP before this)
+    //   PON + DRF + POF             — trigger waveform via triggerRefreshX3
+    //
+    // The UC8179 partial window coordinates are in pixels; x must be
+    // byte-aligned (already validated above).
+
+    if (inGrayscaleMode) {
+      grayscaleRevert();
+    }
+
+    // Build the 9-byte PTL window descriptor.
+    // Parameters are in physical panel coordinates (x=source, y=physical row).
+    // sendPlaneX3 Y-flips the framebuffer, so controller gate 0 = physical row
+    // (displayHeight-1). Translate physical row range to controller gate range:
+    //   gateStart = (displayHeight - 1) - (y + h - 1) = displayHeight - y - h
+    //   gateEnd   = (displayHeight - 1) - y
+    const uint16_t xEnd = x + w - 1;
+    const uint16_t gateStart = static_cast<uint16_t>(displayHeight - y - h);
+    const uint16_t gateEnd   = static_cast<uint16_t>(displayHeight - 1 - y);
+    const uint8_t ptl[9] = {
+        static_cast<uint8_t>(x >> 8),         static_cast<uint8_t>(x & 0xFF),
+        static_cast<uint8_t>(xEnd >> 8),       static_cast<uint8_t>(xEnd & 0xFF),
+        static_cast<uint8_t>(gateStart >> 8),  static_cast<uint8_t>(gateStart & 0xFF),
+        static_cast<uint8_t>(gateEnd >> 8),    static_cast<uint8_t>(gateEnd & 0xFF),
+        0x01,  // PT_SCAN: include partial window in scan
+    };
+
+    // Use the "half"/scrub LUT bank (CDI 0xA9). Unlike _normal/_fast, whose
+    // WW/BW/WB/BB tables are all distinct (so the controller still selects the
+    // waveform from the (DTM1,DTM2) pixel-state pair — i.e. still differential,
+    // just at different voltage/timing), _half has WW==BW and WB==BB. That
+    // collapses the per-pixel selection to "DTM2 says white -> one waveform;
+    // DTM2 says black -> the other," making DTM1's contents irrelevant (see
+    // comment at lut_x3_vcom_half's definition). That's what we need here: a
+    // partial window can't carry a reliably-synced DTM1 baseline for its
+    // region, so any LUT bank that still keys off DTM1 will eventually drift
+    // out of sync and speckle (confirmed: _normal worked once, then speckled
+    // on every subsequent press once an intervening full refresh changed
+    // on-screen content without our windowed DTM1 write tracking it).
+    loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_half, lut_x3_ww_half, lut_x3_bw_half, lut_x3_wb_half,
+                         lut_x3_bb_half);
+
+    // Exact OEM conditioning-pass sequence: PTIN → PTL → DTM2 → PTOUT → DRF.
+    // No DATA_STOP between DTM2 and PTOUT — OEM firmware omits it and the
+    // controller hangs if it appears there.
+    sendCommand(CMD_X3_PARTIAL_IN);
+    sendCommandDataX3(CMD_X3_PARTIAL_WINDOW, ptl, 9);
+    sendPlaneX3(CMD_X3_DTM2, frameBuffer, false);
+    sendCommand(CMD_X3_PARTIAL_OUT);
+    triggerRefreshX3(turnOffScreen, "(win)");
+
+    // Resync DTM1 to the now-displayed frame so subsequent fast/differential
+    // full refreshes diff correctly against what is actually on screen.
+    sendPlaneX3(CMD_X3_DTM1, frameBuffer, false);
+    sendCommand(CMD_X3_DATA_STOP);
+
+    if (Serial) Serial.printf("[%lu]   X3 window display complete\n", millis());
     return;
   }
 
@@ -1471,13 +1528,17 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
   // Write to BW RAM (current frame)
   writeRamBuffer(CMD_WRITE_RAM_BW, windowBuffer.data(), windowBufferSize);
 
-  // Extract window from frameBufferActive (previous frame) for differential
+  // Extract window from frameBufferActive (previous frame) for differential.
+  // Fall back to frameBuffer if the secondary buffer was released (single-buffer
+  // mode); this produces no ghosting because BW and RED will be identical for
+  // the window region, forcing a full absolute drive of every changed pixel.
+  const uint8_t* prevBuf = frameBufferActive ? frameBufferActive : frameBuffer;
   std::vector<uint8_t> previousWindowBuffer(windowBufferSize);
   for (uint16_t row = 0; row < h; row++) {
     const uint16_t srcY = y + row;
     const uint16_t srcOffset = srcY * displayWidthBytes + (x / 8);
     const uint16_t dstOffset = row * windowWidthBytes;
-    memcpy(&previousWindowBuffer[dstOffset], &frameBufferActive[srcOffset], windowWidthBytes);
+    memcpy(&previousWindowBuffer[dstOffset], &prevBuf[srcOffset], windowWidthBytes);
   }
   writeRamBuffer(CMD_WRITE_RAM_RED, previousWindowBuffer.data(), windowBufferSize);
 
