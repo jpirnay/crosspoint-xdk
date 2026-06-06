@@ -1404,7 +1404,24 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
 // EXPERIMENTAL: Windowed update support
 // Displays only a rectangular region of the frame buffer, preserving the rest
 // of the screen. Requirements: x and w must be byte-aligned (multiples of 8
-// pixels)
+// pixels).
+//
+// X3 (UC8179) note: the controller's source driver cannot reliably constrain
+// its PTL partial-window source-column range (HRST/HRED) — doing so produces
+// intermittent speckle independent of LUT choice (confirmed empirically). The
+// X3 path below therefore always widens the PTL source range to the full
+// panel width and constrains only the gate/row range (VRST/VRED), which is
+// the axis the hardware handles cleanly. The caller's (x, w) are still used
+// for framebuffer addressing/bounds — only the PTL descriptor sent to the
+// controller is widened. Practical effect: windowed refreshes are only
+// "narrower than full-panel" along the y/h (physical row) axis; for callers
+// in a rotated logical orientation (e.g. GfxRenderer's logical-portrait mode
+// on this panel), that means only logical regions whose physical projection
+// has a constrained row range — i.e. logical left/right-edge vertical strips
+// spanning the full screen height — actually save refresh time. A logical
+// top/bottom status bar maps to a physical narrow-source-column / full-row
+// band, so windowing it produces a correct but NOT time-saving refresh
+// (effectively a full-panel pass).
 void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const bool turnOffScreen) {
   if (Serial) Serial.printf("[%lu]   Displaying window at (%d,%d) size (%dx%d)\n", millis(), x, y, w, h);
 
@@ -1450,33 +1467,46 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
 
     // Build the 9-byte PTL window descriptor.
     // Parameters are in physical panel coordinates (x=source, y=physical row).
-    // sendPlaneX3 Y-flips the framebuffer, so controller gate 0 = physical row
-    // (displayHeight-1). Translate physical row range to controller gate range:
-    //   gateStart = (displayHeight - 1) - (y + h - 1) = displayHeight - y - h
-    //   gateEnd   = (displayHeight - 1) - y
-    const uint16_t xEnd = x + w - 1;
+    //
+    // HARDWARE CONSTRAINT (confirmed empirically): the UC8179 source driver on
+    // this panel cannot cleanly drive a PTL window whose source-column range
+    // (HRST/HRED) is narrower than the full panel width — doing so produces an
+    // intermittent speckle ("a line every x pixels", ~1-in-10 clean) that is
+    // IDENTICAL regardless of LUT bank (tried fast/differential 0x29, normal
+    // 0xA9, half/scrub 0xA9 — all three speckle equally), which rules out
+    // DTM1/waveform-selection causes. A window with the full source range and
+    // a *narrow gate range* (VRST/VRED), by contrast, comes out perfectly
+    // clean on every single attempt. So: always request the full source range,
+    // and let PTL constrain only the gate (row) range — which is the axis that
+    // actually works. This means a "window" is never narrower than the full
+    // panel width, but the waveform is still confined vertically, which is the
+    // only constraint the hardware can reliably honour.
+    const uint16_t xEnd = static_cast<uint16_t>(displayWidth - 1);
     const uint16_t gateStart = static_cast<uint16_t>(displayHeight - y - h);
     const uint16_t gateEnd   = static_cast<uint16_t>(displayHeight - 1 - y);
     const uint8_t ptl[9] = {
-        static_cast<uint8_t>(x >> 8),         static_cast<uint8_t>(x & 0xFF),
+        0,                                     0,
         static_cast<uint8_t>(xEnd >> 8),       static_cast<uint8_t>(xEnd & 0xFF),
         static_cast<uint8_t>(gateStart >> 8),  static_cast<uint8_t>(gateStart & 0xFF),
         static_cast<uint8_t>(gateEnd >> 8),    static_cast<uint8_t>(gateEnd & 0xFF),
         0x01,  // PT_SCAN: include partial window in scan
     };
+    if (Serial && (x != 0 || w != displayWidth)) {
+      Serial.printf(
+          "[%lu]   NOTE: displayWindow requested source range [%u,%u) narrower than "
+          "panel width %u — widening to full width (hardware requires full HRST/HRED "
+          "range; only the gate/row range can be constrained)\n",
+          millis(), x, x + w, displayWidth);
+    }
 
-    // Use the "half"/scrub LUT bank (CDI 0xA9). Unlike _normal/_fast, whose
-    // WW/BW/WB/BB tables are all distinct (so the controller still selects the
-    // waveform from the (DTM1,DTM2) pixel-state pair — i.e. still differential,
-    // just at different voltage/timing), _half has WW==BW and WB==BB. That
-    // collapses the per-pixel selection to "DTM2 says white -> one waveform;
-    // DTM2 says black -> the other," making DTM1's contents irrelevant (see
-    // comment at lut_x3_vcom_half's definition). That's what we need here: a
-    // partial window can't carry a reliably-synced DTM1 baseline for its
-    // region, so any LUT bank that still keys off DTM1 will eventually drift
-    // out of sync and speckle (confirmed: _normal worked once, then speckled
-    // on every subsequent press once an intervening full refresh changed
-    // on-screen content without our windowed DTM1 write tracking it).
+    // Use the "half"/scrub LUT bank (CDI 0xA9): WW==BW and WB==BB collapses
+    // the controller's per-pixel waveform selection to "DTM2 says white -> one
+    // waveform, DTM2 says black -> the other" — independent of DTM1. This is
+    // not what fixes the speckle (see constraint note above; _normal and
+    // _fast speckle identically), but it remains the right choice for a
+    // windowed update: DTM1 cannot be relied on to hold a correct prior-frame
+    // baseline for an arbitrary partial region, so a LUT that ignores it is
+    // strictly safer than one that doesn't.
     loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_half, lut_x3_ww_half, lut_x3_bw_half, lut_x3_wb_half,
                          lut_x3_bb_half);
 
