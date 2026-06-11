@@ -1360,8 +1360,13 @@ void EInkDisplay::completeDisplay() {
     isScreenOn = false;
   }
 
+  // NOTE: _refreshPending must stay true until the very END of this function. The
+  // loop task (deferred AA, background work) gates its own SPI/display use on
+  // isRefreshPending(), and everything below — DTM1 resync, conditioning passes,
+  // post-full settle — is SPI work owned by this task. Clearing the flag before the
+  // tail let the loop-task AA start its grayscale waveforms mid-tail, stealing the
+  // shared BUSY-ISR semaphore and stalling this task into the 30 s refresh timeout.
   const bool doFullSync = _refreshDoFullSync;
-  _refreshPending = false;
 
   if (!doFullSync) {
     // Keep differential baseline correct for the next x3 fast refresh:
@@ -1373,6 +1378,7 @@ void EInkDisplay::completeDisplay() {
 
     _x3ForceFullSyncNext = false;
     _x3ForcedConditionPassesNext = 0;
+    _refreshPending = false;
     return;
   }
 
@@ -1422,6 +1428,7 @@ void EInkDisplay::completeDisplay() {
   if (_x3InitialFullSyncsRemaining > 0) _x3InitialFullSyncsRemaining--;
   _x3ForceFullSyncNext = false;
   _x3ForcedConditionPassesNext = 0;
+  _refreshPending = false;
 }
 
 void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
