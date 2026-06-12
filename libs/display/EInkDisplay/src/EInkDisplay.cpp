@@ -1028,6 +1028,13 @@ void EInkDisplay::swapBuffers() {
   frameBufferActive = temp;
 }
 
+void EInkDisplay::syncWriteBufferFromActive() const {
+  if (!frameBuffer || !frameBufferActive) {
+    return;
+  }
+  memcpy(frameBuffer, frameBufferActive, bufferSize);
+}
+
 void EInkDisplay::grayscaleRevert() {
   if (!inGrayscaleMode) {
     return;
