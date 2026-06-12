@@ -53,6 +53,13 @@ class EInkDisplay {
   void drawImageTransparent(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                             bool fromProgmem = false) const;
   void swapBuffers();
+  // Copy the just-displayed frame (frameBufferActive) back into the write
+  // buffer. displayBuffer()/triggerDisplay() end with swapBuffers(), so the
+  // write buffer otherwise holds the frame from two refreshes ago — callers
+  // that patch a few regions and re-display (instead of re-rendering the full
+  // frame) must call this first. No-op in single-buffer mode, where the write
+  // buffer is already the displayed frame.
+  void syncWriteBufferFromActive() const;
   void setFramebuffer(const uint8_t* bwBuffer) const;
 
   void copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer);
