@@ -159,10 +159,24 @@ class EInkDisplay {
   // called. On X3 fast differential is unaffected (previous-frame lives in
   // the controller's DTM1 RAM). Grayscale AA is unavailable until restored.
   // No-op if already released. Returns true if the buffer was freed.
+  //
+  // IMPORTANT: swapBuffers() alternates which of frameBuffer0/frameBuffer1 is
+  // the active write target. We must always free the INACTIVE buffer
+  // (frameBufferActive), never the active one (frameBuffer). Freeing
+  // frameBuffer would leave the write target dangling — causing silent heap
+  // corruption on every subsequent pixel write.
   bool releaseSecondaryBuffer() {
-    if (!frameBuffer1) return false;
-    free(frameBuffer1);
-    frameBuffer1 = nullptr;
+    if (!frameBufferActive) return false;
+    // Identify which named slot holds the secondary buffer, then free it.
+    // frameBuffer is the active write target; frameBufferActive is the one
+    // to free. After swapBuffers() the slot assignments can be either way.
+    if (frameBufferActive == frameBuffer0) {
+      free(frameBuffer0);
+      frameBuffer0 = nullptr;
+    } else {
+      free(frameBuffer1);
+      frameBuffer1 = nullptr;
+    }
     frameBufferActive = nullptr;
     return true;
   }
@@ -171,16 +185,19 @@ class EInkDisplay {
   // Initialises it to white (0xFF) and reseeds frameBufferActive.
   // Returns true on success; false if malloc fails (buffer stays null).
   bool reallocSecondaryBuffer() {
-    if (frameBuffer1) return true;  // already allocated
-    frameBuffer1 = static_cast<uint8_t*>(malloc(bufferSize));
-    if (!frameBuffer1) return false;
-    frameBufferActive = frameBuffer1;
-    memset(frameBuffer1, 0xFF, bufferSize);
+    if (frameBufferActive) return true;  // already allocated
+    // Allocate into whichever named slot was freed; prefer the one that is
+    // currently nullptr so we never leak a live buffer.
+    uint8_t** slot = (frameBuffer0 == nullptr) ? &frameBuffer0 : &frameBuffer1;
+    *slot = static_cast<uint8_t*>(malloc(bufferSize));
+    if (!*slot) return false;
+    frameBufferActive = *slot;
+    memset(frameBufferActive, 0xFF, bufferSize);
     return true;
   }
 
   // Returns true if the secondary buffer is currently allocated.
-  bool hasSecondaryBuffer() const { return frameBuffer1 != nullptr; }
+  bool hasSecondaryBuffer() const { return frameBufferActive != nullptr; }
 
   // Save the current framebuffer to a PBM file (desktop/test builds only)
   void saveFrameBufferAsPBM(const char* filename);
