@@ -199,6 +199,20 @@ class EInkDisplay {
   // Returns true if the secondary buffer is currently allocated.
   bool hasSecondaryBuffer() const { return frameBufferActive != nullptr; }
 
+  // Opt in to single-buffer fast differential refresh (X4 only). When the
+  // secondary (previous-frame) buffer has been released, a FAST refresh
+  // normally downgrades to HALF because the host no longer holds the previous
+  // frame to re-seed RED RAM with. But the controller retains the last
+  // displayed frame in RED RAM, and syncRedRamFromFrameBuffer() keeps it
+  // current after every refresh — so a differential only needs the new frame
+  // written to BW RAM. Enable this when the caller can guarantee RED RAM still
+  // holds the previously displayed frame: i.e. the secondary was released right
+  // after a normal refresh and only plain BW updates happen until it is
+  // restored. No effect on X3 (fast differential there already works without
+  // the secondary buffer) and no effect while the secondary buffer is present.
+  void setSingleBufferFastDiff(bool enabled) { _singleBufferFastDiff = enabled; }
+  bool singleBufferFastDiff() const { return _singleBufferFastDiff; }
+
   // Save the current framebuffer to a PBM file (desktop/test builds only)
   void saveFrameBufferAsPBM(const char* filename);
 
@@ -216,6 +230,9 @@ class EInkDisplay {
   uint32_t bufferSize = BUFFER_SIZE;
   bool _x3Mode = false;
   bool _x3RedRamSynced = false;
+  // X4: allow fast differential against the controller's retained RED-RAM
+  // baseline when the secondary buffer is released. See setSingleBufferFastDiff.
+  bool _singleBufferFastDiff = false;
   struct X3GrayState {
     bool lastBaseWasPartial = false;
     bool lsbValid = false;

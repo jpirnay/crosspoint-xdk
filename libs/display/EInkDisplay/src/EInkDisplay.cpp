@@ -1302,9 +1302,16 @@ void EInkDisplay::triggerDisplay(RefreshMode mode, const bool turnOffScreen) {
   }
 
   // X4 path
-  // No previous-frame buffer available (OOM after temporary release):
-  // downgrade FAST to HALF and use single-buffer operation safely.
-  if (mode == FAST_REFRESH && !frameBufferActive) {
+  // No previous-frame buffer available (secondary released or OOM). A fast
+  // differential compares the new frame (BW RAM) against the previously
+  // displayed frame (RED RAM). The host normally re-seeds RED from the
+  // secondary buffer on every refresh, so without it we either:
+  //   - keep RED as-is and diff against the controller's retained baseline
+  //     (single-buffer fast differential, opt-in via setSingleBufferFastDiff),
+  //     valid only while RED still holds the last displayed frame, or
+  //   - downgrade FAST to HALF and run a safe single-buffer full waveform.
+  const bool singleBufferFast = (mode == FAST_REFRESH) && !frameBufferActive && _singleBufferFastDiff;
+  if (mode == FAST_REFRESH && !frameBufferActive && !_singleBufferFastDiff) {
     mode = HALF_REFRESH;
   }
 
@@ -1312,6 +1319,12 @@ void EInkDisplay::triggerDisplay(RefreshMode mode, const bool turnOffScreen) {
   if (mode != FAST_REFRESH) {
     writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
     writeRamBuffer(CMD_WRITE_RAM_RED, frameBuffer, bufferSize);
+  } else if (singleBufferFast) {
+    // Single-buffer fast differential: write only the new frame to BW RAM and
+    // leave RED RAM holding the previously displayed frame — the controller's
+    // retained baseline, kept current by syncRedRamFromFrameBuffer() after each
+    // refresh.
+    writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
   } else {
     writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
     writeRamBuffer(CMD_WRITE_RAM_RED, frameBufferActive ? frameBufferActive : frameBuffer, bufferSize);
