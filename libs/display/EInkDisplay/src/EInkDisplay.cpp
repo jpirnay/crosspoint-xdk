@@ -1149,6 +1149,10 @@ void EInkDisplay::grayscaleRevert() {
     // from the known-white baseline rather than diffing against stale content.
     _x3ForceFullSyncNext = true;
     _x3RedRamSynced = true;
+    // Both DTM planes now hold a BW-coded frame (all-white), not grayscale
+    // planes. Clear lsbValid to match, or it stays true forever and forces
+    // displayGrayscaleBase() down the cleanBaseNeeded path every page.
+    _x3GrayState.lsbValid = false;
     return;
   }
 
@@ -1376,6 +1380,11 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
       memcpy(rowB, rowTmp, displayWidthBytes);
     }
 
+    // Both planes now hold the rebased BW frame, not grayscale planes, so the
+    // next displayGrayscaleBase() can take the differential happy path. This is
+    // the per-page cleanup the tiled AA reader path runs, so leaving lsbValid
+    // true here is what pins cleanBaseNeeded on in steady state.
+    _x3GrayState.lsbValid = false;
     _x3RedRamSynced = true;
     _x3ForceFullSyncNext = false;
     _x3ForcedConditionPassesNext = 0;
@@ -1544,6 +1553,12 @@ void EInkDisplay::completeDisplay() {
     const uint8_t* baseline = frameBufferActive ? frameBufferActive : frameBuffer;
     sendPlaneX3(CMD_X3_DTM1, const_cast<uint8_t*>(baseline), false);
     sendCommand(CMD_X3_DATA_STOP);
+    // Both DTM planes now hold a BW frame, not grayscale planes, so the next
+    // displayGrayscaleBase() can take the differential happy path. Clear
+    // lsbValid to reflect that — otherwise it stays true after any grayscale
+    // page and forces the clean-base fallback forever. (Upstream's e3bf3ed put
+    // this in displayBuffer; our X3 path defers the DTM1 sync to here.)
+    _x3GrayState.lsbValid = false;
     _x3RedRamSynced = true;
 
     _x3ForceFullSyncNext = false;
@@ -1586,6 +1601,10 @@ void EInkDisplay::completeDisplay() {
   // DTM1 resync for full sync (DTM1 needs the current frame, not all-0xFF baseline)
   sendPlaneX3(CMD_X3_DTM1, frameBufferActive ? frameBufferActive : frameBuffer, false);
   sendCommand(CMD_X3_DATA_STOP);
+  // Both DTM planes now hold the BW frame — see the non-full-sync path above;
+  // clear lsbValid so the next displayGrayscaleBase() can take the differential
+  // happy path (upstream e3bf3ed, adapted to our deferred completeDisplay).
+  _x3GrayState.lsbValid = false;
   _x3RedRamSynced = true;
 
   // Post-full settle: one no-op fast diff to clear the post-full controller state
