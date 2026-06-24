@@ -151,6 +151,12 @@ class EInkDisplay {
   void triggerDisplay(RefreshMode mode, bool turnOffScreen = false);
   void completeDisplay();
   bool isRefreshPending() const { return _refreshPending; }
+  // X4: true when the controller's RED RAM holds the last-displayed BW frame
+  // (set by syncRedRamFromFrameBuffer / cleanupGrayscaleBuffers, cleared by grayscale
+  // waveforms and non-fast refreshes). When true, reallocSecondaryBuffer() does not
+  // invalidate the differential baseline — the host copy is stale but the controller's
+  // RED RAM is unaffected by host-side allocation.
+  bool isRedRamSynced() const { return !_x3Mode && _redRamSynced; }
 
   // Release only the secondary (previous-frame) buffer (~52 KB on X3, ~48 KB
   // on X4) to free heap temporarily — e.g. during chapter compilation when
@@ -233,6 +239,9 @@ class EInkDisplay {
   // X4: allow fast differential against the controller's retained RED-RAM
   // baseline when the secondary buffer is released. See setSingleBufferFastDiff.
   bool _singleBufferFastDiff = false;
+  // X4: RED RAM holds the last-displayed frame (set by syncRedRamFromFrameBuffer,
+  // cleared when grayscale or non-fast waveforms leave RED RAM in an unknown state).
+  bool _redRamSynced = false;
   struct X3GrayState {
     bool lastBaseWasPartial = false;
     bool lsbValid = false;

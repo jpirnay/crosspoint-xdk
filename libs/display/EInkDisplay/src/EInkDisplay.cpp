@@ -503,6 +503,7 @@ void EInkDisplay::begin() {
   memset(frameBuffer0, 0xFF, bufferSize);
   memset(frameBuffer1, 0xFF, bufferSize);
   _x3RedRamSynced = false;
+  _redRamSynced = false;
   _x3InitialFullSyncsRemaining = _x3Mode ? 2 : 0;
   _x3ForceFullSyncNext = false;
   _x3ForcedConditionPassesNext = 0;
@@ -1082,6 +1083,8 @@ void EInkDisplay::grayscaleRevert() {
   }
 
   // X4: load the revert LUT and fast refresh
+  // RED RAM held the MSB grayscale plane — it is no longer a valid BW baseline.
+  _redRamSynced = false;
   setCustomLUT(true, lut_grayscale_revert);
   refreshDisplay(FAST_REFRESH);
   setCustomLUT(false);
@@ -1157,6 +1160,7 @@ void EInkDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) {
   }
   setRamArea(0, 0, displayWidth, displayHeight);
   writeRamBuffer(CMD_WRITE_RAM_RED, msbBuffer, bufferSize);
+  _redRamSynced = false;  // RED RAM now holds MSB plane, not a valid BW baseline
 }
 
 void EInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer) {
@@ -1168,6 +1172,7 @@ void EInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* 
   setRamArea(0, 0, displayWidth, displayHeight);
   writeRamBuffer(CMD_WRITE_RAM_BW, lsbBuffer, bufferSize);
   writeRamBuffer(CMD_WRITE_RAM_RED, msbBuffer, bufferSize);
+  _redRamSynced = false;  // RED RAM holds MSB plane, not a valid BW baseline
 }
 
 void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
@@ -1213,6 +1218,7 @@ void EInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
 
   setRamArea(0, 0, displayWidth, displayHeight);
   writeRamBuffer(CMD_WRITE_RAM_RED, bwBuffer, bufferSize);
+  _redRamSynced = true;  // RED RAM now holds the BW baseline, same as syncRedRamFromFrameBuffer()
   inGrayscaleMode = false;
   // Restore frameBuffer from the BW source so subsequent draws (e.g. popups)
   // paint onto a valid BW baseline rather than leftover grayscale plane data.
@@ -1235,6 +1241,7 @@ void EInkDisplay::syncRedRamFromFrameBuffer() {
   const uint8_t* justDisplayed = frameBufferActive ? frameBufferActive : frameBuffer;
   setRamArea(0, 0, displayWidth, displayHeight);
   writeRamBuffer(CMD_WRITE_RAM_RED, justDisplayed, bufferSize);
+  _redRamSynced = true;
 }
 
 void EInkDisplay::triggerDisplay(RefreshMode mode, const bool turnOffScreen) {
@@ -1319,16 +1326,17 @@ void EInkDisplay::triggerDisplay(RefreshMode mode, const bool turnOffScreen) {
   if (mode != FAST_REFRESH) {
     writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
     writeRamBuffer(CMD_WRITE_RAM_RED, frameBuffer, bufferSize);
-  } else if (singleBufferFast) {
-    // Single-buffer fast differential: write only the new frame to BW RAM and
-    // leave RED RAM holding the previously displayed frame — the controller's
-    // retained baseline, kept current by syncRedRamFromFrameBuffer() after each
-    // refresh.
+    _redRamSynced = false;  // non-fast waveform leaves RED RAM holding BW content, not post-waveform state
+  } else if (singleBufferFast || _redRamSynced) {
+    // Single-buffer fast differential, or double-buffer with RED RAM already
+    // holding the correct previous-frame baseline from syncRedRamFromFrameBuffer():
+    // write only the new frame to BW RAM and leave RED RAM as-is.
     writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
   } else {
     writeRamBuffer(CMD_WRITE_RAM_BW, frameBuffer, bufferSize);
     writeRamBuffer(CMD_WRITE_RAM_RED, frameBufferActive ? frameBufferActive : frameBuffer, bufferSize);
   }
+  _redRamSynced = false;  // waveform will fire; RED is no longer post-waveform state until resynced
   swapBuffers();
   refreshDisplay(mode, turnOffScreen);  // issues CMD_MASTER_ACTIVATION + returns
   // X4: all post-refresh work is done inside refreshDisplay(); nothing left
@@ -1503,12 +1511,16 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
     // only constraint the hardware can reliably honour.
     const uint16_t xEnd = static_cast<uint16_t>(displayWidth - 1);
     const uint16_t gateStart = static_cast<uint16_t>(displayHeight - y - h);
-    const uint16_t gateEnd   = static_cast<uint16_t>(displayHeight - 1 - y);
+    const uint16_t gateEnd = static_cast<uint16_t>(displayHeight - 1 - y);
     const uint8_t ptl[9] = {
-        0,                                     0,
-        static_cast<uint8_t>(xEnd >> 8),       static_cast<uint8_t>(xEnd & 0xFF),
-        static_cast<uint8_t>(gateStart >> 8),  static_cast<uint8_t>(gateStart & 0xFF),
-        static_cast<uint8_t>(gateEnd >> 8),    static_cast<uint8_t>(gateEnd & 0xFF),
+        0,
+        0,
+        static_cast<uint8_t>(xEnd >> 8),
+        static_cast<uint8_t>(xEnd & 0xFF),
+        static_cast<uint8_t>(gateStart >> 8),
+        static_cast<uint8_t>(gateStart & 0xFF),
+        static_cast<uint8_t>(gateEnd >> 8),
+        static_cast<uint8_t>(gateEnd & 0xFF),
         0x01,  // PT_SCAN: include partial window in scan
     };
     if (Serial && (x != 0 || w != displayWidth)) {
@@ -1527,8 +1539,7 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
     // windowed update: DTM1 cannot be relied on to hold a correct prior-frame
     // baseline for an arbitrary partial region, so a LUT that ignores it is
     // strictly safer than one that doesn't.
-    loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_half, lut_x3_ww_half, lut_x3_bw_half, lut_x3_wb_half,
-                         lut_x3_bb_half);
+    loadLutBankX3WithCdi(0xA9, 0x07, lut_x3_vcom_half, lut_x3_ww_half, lut_x3_bw_half, lut_x3_wb_half, lut_x3_bb_half);
 
     // Exact OEM conditioning-pass sequence: PTIN → PTL → DTM2 → PTOUT → DRF.
     // No DATA_STOP between DTM2 and PTOUT — OEM firmware omits it and the
