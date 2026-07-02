@@ -702,28 +702,32 @@ void EInkDisplay::sendCommandDataByteX3(uint8_t cmd, uint8_t d0, uint8_t d1) {
 void EInkDisplay::sendPlaneX3(uint8_t ramCmd, uint8_t* buf, bool invert) {
   // The X3 controller scans gates upward (UD=1), so the first byte sent
   // maps to the bottom-left pixel. Our framebuffer stores row 0 at offset
-  // 0 (top), so we Y-flip rows before sending and restore after. Avoids
-  // allocating a transposed copy.
-  auto flipRowsInPlace = [&](uint8_t* p) {
-    uint8_t rowTmp[128];
-    for (uint16_t top = 0, bot = displayHeight - 1; top < bot; top++, bot--) {
-      uint8_t* rowA = p + static_cast<uint32_t>(top) * displayWidthBytes;
-      uint8_t* rowB = p + static_cast<uint32_t>(bot) * displayWidthBytes;
-      memcpy(rowTmp, rowA, displayWidthBytes);
-      memcpy(rowA, rowB, displayWidthBytes);
-      memcpy(rowB, rowTmp, displayWidthBytes);
-    }
-  };
-  auto invertBuffer = [&](uint8_t* p) {
-    auto* w = reinterpret_cast<uint32_t*>(p);
-    for (uint32_t i = 0; i < bufferSize / 4; i++) w[i] = ~w[i];
-  };
-  if (invert) invertBuffer(buf);
-  flipRowsInPlace(buf);
+  // 0 (top), so we send rows in reverse (bottom-to-top) order.
+  //
+  // Stream each row straight from `buf` into a single CS-low transaction —
+  // same pattern as fillPlaneX3() — so we never mutate the source buffer.
+  // The previous mutate/undo approach flipped and inverted `buf` in place,
+  // then reversed both, costing four full passes over ~50 KB per plane and
+  // leaving the framebuffer transiently corrupted (a hazard if an early
+  // return were ever added between the two undo passes). When `invert` is
+  // set we copy the row into a scratch buffer and negate it there, leaving
+  // `buf` untouched.
+  uint8_t rowScratch[128];
   sendCommand(ramCmd);
-  sendData(buf, static_cast<uint16_t>(bufferSize));
-  flipRowsInPlace(buf);
-  if (invert) invertBuffer(buf);
+  SPI.beginTransaction(spiSettings);
+  digitalWrite(_dc, HIGH);
+  digitalWrite(_cs, LOW);
+  for (int32_t y = displayHeight - 1; y >= 0; y--) {
+    const uint8_t* row = buf + static_cast<uint32_t>(y) * displayWidthBytes;
+    if (invert) {
+      for (uint16_t i = 0; i < displayWidthBytes; i++) rowScratch[i] = ~row[i];
+      SPI.writeBytes(rowScratch, displayWidthBytes);
+    } else {
+      SPI.writeBytes(row, displayWidthBytes);
+    }
+  }
+  digitalWrite(_cs, HIGH);
+  SPI.endTransaction();
 }
 
 void EInkDisplay::fillPlaneX3(uint8_t ramCmd, uint8_t fillByte) {
@@ -1579,7 +1583,7 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
   if (Serial)
     Serial.printf("[%lu]   Window buffer size: %lu bytes (%d x %d pixels)\n", millis(), windowBufferSize, w, h);
 
-  // Allocate temporary buffer on stack
+  // Allocate temporary window buffer on the heap
   std::vector<uint8_t> windowBuffer(windowBufferSize);
 
   // Extract window region from frame buffer
